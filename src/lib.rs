@@ -1,15 +1,17 @@
 #![no_std]
-use soroban_sdk::{contract, contracttype, contractimpl, Address, Env, Vec, Symbol};
+use soroban_sdk::{contract, contracttype, contractimpl, Address, Env, Vec, Symbol, token};
 
 // --- DATA STRUCTURES ---
 
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
-    Admin,           // The address that controls the protocol parameters
-    Circle(u64),     // Map circle_id to CircleInfo
-    Member(Address), // Map user address to their Reputation Score
-    CircleCount,     // Counter for generating new circle IDs
+    Admin,
+    Circle(u64),
+    Member(Address),
+    CircleCount,
+    // New: Tracks if a user has paid for a specific circle (CircleID, UserAddress)
+    Deposit(u64, Address), 
 }
 
 #[contracttype]
@@ -110,6 +112,33 @@ impl SoroSusuTrait for SoroSusu {
     }
 
     fn deposit(env: Env, user: Address, circle_id: u64) {
-        // TODO: Logic to transfer tokens from user to contract
+        // 1. Authorization: The user must sign this!
+        user.require_auth();
+
+        // 2. Load the Circle Data
+        let circle: CircleInfo = env.storage().instance().get(&DataKey::Circle(circle_id)).unwrap();
+
+        // 3. Check if user is actually a member
+        if !circle.members.contains(&user) {
+            panic!("User is not a member of this circle");
+        }
+
+        // 4. Create the Token Client (The "Remote Control")
+        // This tells Soroban: "We want to talk to the token contract at this address"
+        let client = token::Client::new(&env, &circle.token);
+
+        // 5. Transfer the Money
+        // From: User
+        // To: This Contract (env.current_contract_address())
+        // Amount: The circle's contribution amount
+        client.transfer(
+            &user, 
+            &env.current_contract_address(), 
+            &circle.contribution_amount
+        );
+
+        // 6. Mark as Paid
+        // We save "True" for this specific (CircleID, User) combination
+        env.storage().instance().set(&DataKey::Deposit(circle_id, user), &true);
     }
 }
